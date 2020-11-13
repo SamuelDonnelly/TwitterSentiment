@@ -1,0 +1,151 @@
+---
+title: "TwitterScrape"
+author: "Sam Donnelly"
+date: "6/13/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, options(scipen = 999), message = FALSE, warning = FALSE)
+```
+
+```{r}
+library(twitteR)
+library(tidytext)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(textclean)
+library(sentimentr)
+library(textdata)
+library(readr)
+library(tm)
+library(qdapDictionaries)
+```
+
+## AP Keys
+```{r}
+consumer_key <- "7hhIyGyY3hQOB643hd8XLV4C9"
+consumer_secret <- "4HNuZtwO1w0IxFmj4S1kTJDtz7FRrm5PnJlE3JiSuy7X1xzDDP"
+access_token <- "1271914379395596294-G5ZRd7kFszCZfBvCJavrQaUd2hWMUo"
+access_secret <- "N3t44XzxIM1WCZS7ZOwU0Lc6EO1TwScEV1AAIdew9hZjy"
+
+setup_twitter_oauth(consumer_key, consumer_secret, access_token, access_secret)
+```
+
+## Scrape Twitter
+```{r}
+vc_scrape <- searchTwitter("#$vet", n=300, lang = "en")
+
+vc_df <- twListToDF(vc_scrape)
+
+tweet_words <- vc_df %>% select(text, retweetCount, created) #extract columns of interest
+```
+
+## Create Unique Stopwords DF without valence shifters
+```{r}
+sw_column <- c(stop_words$word)#Remove second column from DF
+
+
+x <- c(amplification.words, deamplification.words, negation.words) #Create vector of valence shifters
+
+
+stop_words_clean <- setdiff(sw_column, x) #Remove valence shifters from stop words vector.
+
+```
+
+## Clean Text
+```{r}
+tweet_words$text <- sapply(tweet_words$text, tolower)
+
+
+
+tweet_words$text <- rm_stopwords(tweet_words$text, tm::stopwords("english"))
+
+tweet_words$text <- replace_emoji(tweet_words$text)
+tweet_words$text <- gsub("https\\S*", "", tweet_words$text)
+tweet_words$text <- gsub("@\\S*", "", tweet_words$text)
+tweet_words$text <- gsub("[0-9]", "", tweet_words$text)
+tweet_words$text <- gsub("[[:punct:]]", "", tweet_words$text)
+tweet_words$text <- gsub("amp", "", tweet_words$text)
+tweet_words$text <- gsub("vet", "", tweet_words$text)
+tweet_words$text <- gsub("btc", "", tweet_words$text)
+tweet_words$text <- gsub("eth", "", tweet_words$text)
+tweet_words$text <- gsub("xrp", "", tweet_words$text)
+tweet_words$text <- gsub("vefam", "", tweet_words$text)
+tweet_words$text <- gsub("vethor", "", tweet_words$text)
+tweet_words$text <- gsub("btr", "", tweet_words$text)
+tweet_words$text <- gsub("crypto", "", tweet_words$text)
+tweet_words$text <- gsub("vtho", "", tweet_words$text)
+tweet_words$text <- gsub("vechain", "", tweet_words$text)
+tweet_words$text <- gsub("rt", "", tweet_words$text)
+tweet_words$text <- gsub("^[[:space:]]*","", tweet_words$text) #remove leading spaces
+tweet_words$text <- gsub("[[:space:]]*$","", tweet_words$text) #remove trailing spaces
+tweet_words$text <- gsub(" +", " ", tweet_words$text) #remove extra spaces
+
+```
+
+## Save to CSV
+```{r}
+write_csv(tweet_words, path = "TwitterScrape.csv")
+```
+
+## Read in Data
+```{r}
+data <- read.csv("TwitterScrape.csv")  
+```
+
+## Fix Dates: Remove Time
+```{r}
+#data$created <- replace_to(data$created, char = "T", n = 1, include = FALSE) 
+```
+
+## Create Year/Month/Day Columns
+```{r}
+data <- separate(data, created, into = c("Year", "Month", "Day", "Hour", "Min"))
+data <- separate(data, Day, into = c("Day", "Hour"), sep = "T")
+data$Min <- replace_to(data$Min, char = "Z", n = 1, include = FALSE)
+```
+
+## Create Key for Sentiment Function
+```{r}
+mykey <- update_polarity_table(lexicon::hash_sentiment_jockers_rinker,
+    x = data.frame(
+        words = c("bullish", "pumping", "ath", "bear"),
+        polarity = c(1, 1, 1, -.75),
+        stringsAsFactors = FALSE))
+```
+
+## Apply sentiment_by function to Text 
+```{r}
+sentiment_score <- data$text %>%
+  get_sentences(data$text) %>%
+  sentiment_by(., polarity_dt = mykey) %>%
+  select(ave_sentiment)
+
+sent <- c(sentiment_score$ave_sentiment) #sentiment_by creates a data frame, this extracts the score from that data frame into a vector to be added to the data frame "data".
+
+data$sentiment <- c(sent) #add sentiment column to data frame.
+```
+
+## Remove rows with 0 sentiment.
+```{r}
+data <- data %>%
+  filter(., sentiment != 0.0000)
+```
+
+## Group by Day
+```{r}
+sentiment_day <- data %>%
+  group_by(Day) %>%
+  summarise(Average = mean(sentiment), SD = sd(sentiment))
+```
+
+## Visualize Sentiment
+```{r}
+sentiment_day %>%
+  ggplot(., aes(x = Day, y = Average, fill = Hour)) +
+  geom_col(color = "black")
+ # geom_errorbar(aes(ymin=Average-SD, ymax=Average+SD), width=0.2)
+```
+
